@@ -13,7 +13,7 @@ const loadingSpinner = document.getElementById('loadingSpinner');
 const messageArea = document.getElementById('messageArea');
 const saveOptionsModal = new bootstrap.Modal(document.getElementById('saveOptionsModal'));
 
-// API base URL
+// API base URL - for Vercel deployment with Supabase
 const API_BASE = window.location.origin + '/api/clipboard';
 
 // Utility functions
