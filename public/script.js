@@ -13,8 +13,43 @@ const loadingSpinner = document.getElementById('loadingSpinner');
 const messageArea = document.getElementById('messageArea');
 const saveOptionsModal = new bootstrap.Modal(document.getElementById('saveOptionsModal'));
 
-// API base URL - for Vercel deployment with Supabase
+// API base URL - works for both local development and Vercel production
 const API_BASE = window.location.origin + '/api/clipboard';
+
+// Debug logging function
+function debugLog(message, data = null) {
+    const timestamp = new Date().toISOString();
+    const logMessage = `[${timestamp}] ${message}`;
+    console.log(logMessage);
+    if (data) {
+        console.log('Data:', data);
+    }
+}
+
+// Enhanced error handling function
+function handleApiError(error, context) {
+    debugLog(`API Error in ${context}:`, error);
+    
+    if (error.name === 'TypeError' && error.message.includes('fetch')) {
+        debugLog('Network Error Details:', {
+            url: error.url || 'Unknown',
+            message: error.message,
+            stack: error.stack
+        });
+        return 'Network connection failed. Check your internet connection.';
+    }
+    
+    if (error.status) {
+        debugLog('HTTP Error Details:', {
+            status: error.status,
+            statusText: error.statusText,
+            url: error.url
+        });
+        return `Server error (${error.status}): ${error.statusText}`;
+    }
+    
+    return 'An unexpected error occurred. Please try again.';
+}
 
 // Utility functions
 function showLoading() {
@@ -165,20 +200,36 @@ document.getElementById('confirmSaveBtn').addEventListener('click', async () => 
     clearMessage();
     saveOptionsModal.hide();
     
+    const requestData = { 
+        content, 
+        accessType: currentSaveType,
+        expiryHours: expiryHours > 0 ? expiryHours : null
+    };
+    
+    debugLog('Making API request to create clipboard:', {
+        url: `${API_BASE}`,
+        method: 'POST',
+        data: requestData
+    });
+    
     try {
         const response = await fetch(`${API_BASE}`, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
             },
-            body: JSON.stringify({ 
-                content, 
-                accessType: currentSaveType,
-                expiryHours: expiryHours > 0 ? expiryHours : null
-            })
+            body: JSON.stringify(requestData)
+        });
+        
+        debugLog('API Response received:', {
+            status: response.status,
+            statusText: response.statusText,
+            ok: response.ok,
+            url: response.url
         });
         
         const data = await response.json();
+        debugLog('API Response data:', data);
         
         if (response.ok) {
             let message = 'Clipboard saved successfully!';
@@ -209,14 +260,20 @@ document.getElementById('confirmSaveBtn').addEventListener('click', async () => 
             contentEditor.value = '';
         } else {
             let errorMessage = data.error || 'Failed to save clipboard';
+            debugLog('API Error Response:', {
+                status: response.status,
+                error: data.error,
+                message: errorMessage
+            });
+            
             if (errorMessage.includes('Database error')) {
                 errorMessage = 'Server error. Please try again.';
             }
             showMessage(errorMessage, 'danger');
         }
     } catch (error) {
-        showMessage('Network error. Please try again.', 'danger');
-        console.error('Error:', error);
+        const errorMessage = handleApiError(error, 'create clipboard');
+        showMessage(errorMessage, 'danger');
     } finally {
         hideLoading();
     }

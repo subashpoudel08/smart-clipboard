@@ -1,12 +1,18 @@
 const express = require('express');
 const cors = require('cors');
+const path = require('path');
 const { createClient } = require('@supabase/supabase-js');
 
+// Load local configuration
+const config = require('./config-local');
+
 const app = express();
+const PORT = config.PORT || 3002;
 
 // Middleware
 app.use(cors());
 app.use(express.json());
+app.use(express.static('public'));
 
 // Debug logging function
 function debugLog(message, data = null) {
@@ -19,8 +25,8 @@ function debugLog(message, data = null) {
 }
 
 // Initialize Supabase client
-const supabaseUrl = process.env.SUPABASE_URL;
-const supabaseKey = process.env.SUPABASE_ANON_KEY;
+const supabaseUrl = config.SUPABASE_URL;
+const supabaseKey = config.SUPABASE_ANON_KEY;
 
 debugLog('Initializing Supabase client...', {
     hasUrl: !!supabaseUrl,
@@ -29,14 +35,14 @@ debugLog('Initializing Supabase client...', {
     keyLength: supabaseKey ? supabaseKey.length : 0
 });
 
-if (!supabaseUrl || !supabaseKey) {
-    console.error('❌ Missing Supabase environment variables in Vercel!');
-    console.error('Please set these environment variables in your Vercel dashboard:');
-    console.error('1. Go to your Vercel project dashboard');
-    console.error('2. Settings → Environment Variables');
-    console.error('3. Add SUPABASE_URL and SUPABASE_ANON_KEY');
-    console.error('4. Redeploy your project');
-    return res.status(500).json({ error: 'Server configuration error' });
+if (!supabaseUrl || !supabaseKey || supabaseUrl.includes('your_supabase_project_url_here')) {
+    console.error('❌ Missing or invalid Supabase credentials!');
+    console.error('Please update config-local.js with your actual Supabase credentials.');
+    console.error('1. Go to your Supabase dashboard');
+    console.error('2. Settings → API');
+    console.error('3. Copy Project URL and anon public key');
+    console.error('4. Update config-local.js');
+    process.exit(1);
 }
 
 const supabase = createClient(supabaseUrl, supabaseKey);
@@ -51,20 +57,23 @@ async function testSupabaseConnection() {
             .limit(1);
         
         if (error) {
-            debugLog('Supabase connection test failed:', error);
+            debugLog('❌ Supabase connection test failed:', error);
+            console.error('❌ Database connection failed!');
+            console.error('Make sure:');
+            console.error('1. Your Supabase project is active');
+            console.error('2. You ran the supabase-setup.sql in SQL Editor');
+            console.error('3. Your credentials are correct');
             return false;
         }
         
-        debugLog('Supabase connection test successful');
+        debugLog('✅ Supabase connection test successful');
+        console.log('✅ Connected to Supabase successfully!');
         return true;
     } catch (error) {
-        debugLog('Supabase connection test error:', error);
+        debugLog('❌ Supabase connection test error:', error);
         return false;
     }
 }
-
-// Test connection on startup
-testSupabaseConnection();
 
 // Generate unique codes
 function generateShareCode() {
@@ -78,9 +87,16 @@ function generateViewCode() {
     return Math.floor(10000 + Math.random() * 90000).toString(); // 5 digits
 }
 
+// Routes
+app.get('/', (req, res) => {
+    res.sendFile(path.join(__dirname, 'public', 'index.html'));
+});
+
 // Create new clipboard
-app.post('/', async (req, res) => {
+app.post('/api/clipboard', async (req, res) => {
     const { content, accessType, expiryHours } = req.body;
+    
+    debugLog('Creating clipboard:', { content: content?.substring(0, 50) + '...', accessType, expiryHours });
     
     if (!content) {
         return res.status(400).json({ error: 'Content is required' });
@@ -116,12 +132,14 @@ app.post('/', async (req, res) => {
             .single();
 
         if (error) {
-            console.error('Supabase error:', error);
+            debugLog('❌ Supabase error:', error);
             if (error.code === '23505') { // Unique constraint violation
                 return res.status(500).json({ error: 'Code collision, please try again' });
             }
             return res.status(500).json({ error: 'Database error: ' + error.message });
         }
+        
+        debugLog('✅ Clipboard created successfully:', { id: data.id, shareCode, viewCode });
         
         res.json({
             id: data.id,
@@ -132,14 +150,16 @@ app.post('/', async (req, res) => {
             message: 'Clipboard created successfully'
         });
     } catch (error) {
-        console.error('Error creating clipboard:', error);
+        debugLog('❌ Error creating clipboard:', error);
         res.status(500).json({ error: 'Internal server error' });
     }
 });
 
 // Get clipboard by share code (edit mode)
-app.get('/share/:code', async (req, res) => {
+app.get('/api/clipboard/share/:code', async (req, res) => {
     const { code } = req.params;
+    
+    debugLog('Fetching clipboard by share code:', { code });
     
     try {
         const { data, error } = await supabase
@@ -149,13 +169,17 @@ app.get('/share/:code', async (req, res) => {
             .single();
 
         if (error || !data) {
+            debugLog('❌ Clipboard not found:', { code, error });
             return res.status(404).json({ error: 'Clipboard not found' });
         }
 
         // Check if expired
         if (data.expiry_at && new Date(data.expiry_at) <= new Date()) {
+            debugLog('❌ Clipboard expired:', { code, expiryAt: data.expiry_at });
             return res.status(410).json({ error: 'Clipboard has expired' });
         }
+
+        debugLog('✅ Clipboard fetched successfully:', { id: data.id, code });
 
         res.json({
             id: data.id,
@@ -167,14 +191,16 @@ app.get('/share/:code', async (req, res) => {
             isEditable: true
         });
     } catch (error) {
-        console.error('Error fetching clipboard:', error);
+        debugLog('❌ Error fetching clipboard:', error);
         res.status(500).json({ error: 'Internal server error' });
     }
 });
 
 // Get clipboard by view code (view mode)
-app.get('/view/:code', async (req, res) => {
+app.get('/api/clipboard/view/:code', async (req, res) => {
     const { code } = req.params;
+    
+    debugLog('Fetching clipboard by view code:', { code });
     
     try {
         const { data, error } = await supabase
@@ -184,13 +210,17 @@ app.get('/view/:code', async (req, res) => {
             .single();
 
         if (error || !data) {
+            debugLog('❌ Clipboard not found:', { code, error });
             return res.status(404).json({ error: 'Clipboard not found' });
         }
 
         // Check if expired
         if (data.expiry_at && new Date(data.expiry_at) <= new Date()) {
+            debugLog('❌ Clipboard expired:', { code, expiryAt: data.expiry_at });
             return res.status(410).json({ error: 'Clipboard has expired' });
         }
+
+        debugLog('✅ Clipboard fetched successfully:', { id: data.id, code });
 
         res.json({
             id: data.id,
@@ -203,15 +233,17 @@ app.get('/view/:code', async (req, res) => {
             isEditable: false
         });
     } catch (error) {
-        console.error('Error fetching clipboard:', error);
+        debugLog('❌ Error fetching clipboard:', error);
         res.status(500).json({ error: 'Internal server error' });
     }
 });
 
 // Update clipboard
-app.put('/:id', async (req, res) => {
+app.put('/api/clipboard/:id', async (req, res) => {
     const { id } = req.params;
     const { content, shareCode } = req.body;
+    
+    debugLog('Updating clipboard:', { id, content: content?.substring(0, 50) + '...', shareCode });
     
     if (!content) {
         return res.status(400).json({ error: 'Content is required' });
@@ -227,11 +259,13 @@ app.put('/:id', async (req, res) => {
             .single();
 
         if (fetchError || !existingClipboard) {
+            debugLog('❌ Clipboard not found or access denied:', { id, shareCode });
             return res.status(404).json({ error: 'Clipboard not found or access denied' });
         }
 
         // Check if expired
         if (existingClipboard.expiry_at && new Date(existingClipboard.expiry_at) <= new Date()) {
+            debugLog('❌ Clipboard expired:', { id, expiryAt: existingClipboard.expiry_at });
             return res.status(410).json({ error: 'Clipboard has expired' });
         }
 
@@ -249,10 +283,12 @@ app.put('/:id', async (req, res) => {
             .single();
 
         if (error) {
-            console.error('Supabase update error:', error);
+            debugLog('❌ Supabase update error:', error);
             return res.status(500).json({ error: 'Failed to update clipboard' });
         }
         
+        debugLog('✅ Clipboard updated successfully:', { id });
+
         res.json({
             message: 'Clipboard updated successfully',
             content: data.content,
@@ -260,15 +296,17 @@ app.put('/:id', async (req, res) => {
             lastEditAt: data.last_edit_at
         });
     } catch (error) {
-        console.error('Error updating clipboard:', error);
+        debugLog('❌ Error updating clipboard:', error);
         res.status(500).json({ error: 'Internal server error' });
     }
 });
 
 // Delete clipboard
-app.delete('/:id', async (req, res) => {
+app.delete('/api/clipboard/:id', async (req, res) => {
     const { id } = req.params;
     const { shareCode } = req.body;
+    
+    debugLog('Deleting clipboard:', { id, shareCode });
     
     try {
         const { error } = await supabase
@@ -278,15 +316,36 @@ app.delete('/:id', async (req, res) => {
             .eq('share_code', shareCode);
 
         if (error) {
-            console.error('Supabase delete error:', error);
+            debugLog('❌ Supabase delete error:', error);
             return res.status(404).json({ error: 'Clipboard not found or access denied' });
         }
         
+        debugLog('✅ Clipboard deleted successfully:', { id });
+
         res.json({ message: 'Clipboard deleted successfully' });
     } catch (error) {
-        console.error('Error deleting clipboard:', error);
+        debugLog('❌ Error deleting clipboard:', error);
         res.status(500).json({ error: 'Internal server error' });
     }
 });
 
-module.exports = app; 
+// Start server
+async function startServer() {
+    console.log('🚀 Starting Smart Clipboard server with Supabase...');
+    console.log(`📍 Server will run on: http://localhost:${PORT}`);
+    
+    // Test Supabase connection first
+    const connectionOk = await testSupabaseConnection();
+    if (!connectionOk) {
+        console.log('❌ Failed to connect to Supabase. Please check your configuration.');
+        process.exit(1);
+    }
+    
+    app.listen(PORT, () => {
+        console.log(`✅ Server running on http://localhost:${PORT}`);
+        console.log('📝 Ready to test your Smart Clipboard app!');
+        console.log('🌐 Open your browser and go to: http://localhost:3002');
+    });
+}
+
+startServer(); 
